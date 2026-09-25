@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "artworks": [
+    {
+      "id": "car",
+      "title": "Road Trip",
+      "category": "Cars & Trucks",
+      "premium": false,
+      "image_url": "car.png",
+      "age_group": "Adults",
+      "progress_id": "car",
+      "sort_order": 10,
+      "new": false
+    },
+    {
+      "id": "tractor",
+      "title": "Farm Tractor",
+      "category": "Farm Life",
+      "premium": false,
+      "image_url": "tractor.png",
+      "age_group": "Adults",
+      "progress_id": "tractor",
+      "sort_order": 20,
+      "new": true
+    },
+    {
+      "id": "bird",
+      "title": "Garden Bird",
+      "category": "Animals",
+      "premium": false,
+      "image_url": "bird.png",
+      "age_group": "Teens",
+      "progress_id": "bird",
+      "sort_order": 30,
+      "new": false
+    },
+    {
+      "id": "bunny",
+      "title": "Happy Bunny",
+      "category": "Animals",
+      "premium": false,
+      "image_url": "bunny.png",
+      "age_group": "Kids",
+      "progress_id": "bunny",
+      "sort_order": 40,
+      "new": false
+    },
+    {
+      "id": "fairy",
+      "title": "Forest Fairy",
+      "category": "Fantasy",
+      "premium": true,
+      "image_url": "fairy.png",
+      "age_group": "Kids",
+      "progress_id": "fairy",
+      "sort_order": 50,
+      "new": false
+    },
+    {
+      "id": "castle",
+      "title": "Dream Castle",
+      "category": "Fantasy",
+      "premium": true,
+      "image_url": "castle.png",
+      "age_group": "Kids",
+      "progress_id": "castle",
+      "sort_order": 60,
+      "new": false
+    },
+    {
+      "id": "firetruck",
+      "title": "Fire Truck",
+      "category": "Cars & Trucks",
+      "premium": true,
+      "image_url": "firetruck.png",
+      "age_group": "Kids",
+      "progress_id": "firetruck",
+      "sort_order": 70,
+      "new": false
+    },
+    {
+      "id": "playground",
+      "title": "Playground",
+      "category": "Kids",
+      "premium": true,
+      "image_url": "playground.png",
+      "age_group": "Kids",
+      "progress_id": "playground",
+      "sort_order": 80,
+      "new": false
+    },
+    {
+      "id": "rainbow",
+      "title": "Rainbow Day",
+      "category": "Kids",
+      "premium": true,
+      "image_url": "rainbow.png",
+      "age_group": "Kids",
+      "progress_id": "rainbow",
+      "sort_order": 90,
+      "new": false
+    },
+    {
+      "id": "trex",
+      "title": "T-Rex",
+      "category": "Dinosaurs",
+      "premium": true,
+      "image_url": "trex.png",
+      "age_group": "Kids",
+      "progress_id": "trex",
+      "sort_order": 100,
+      "new": false
+    },
+    {
+      "id": "triceratops",
+      "title": "Triceratops",
+      "category": "Dinosaurs",
+      "premium": true,
+      "image_url": "triceratops.png",
+      "age_group": "Kids",
+      "progress_id": "triceratops",
+      "sort_order": 110,
+      "new": false
+    }
+  ]
+}

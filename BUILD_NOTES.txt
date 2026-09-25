@@ -1,0 +1,53 @@
+HuePop build_new4 changes
+=========================
+
+BRANDING
+- assets/app-icon.png is wired as the iOS/Android launcher/store icon source.
+- Generated iOS AppIcon and Android mipmap launcher images are included.
+- assets/brand-image.png is shown at the upper-left of Home, Library, My Art, Premium and Profile.
+- Screen labels appear to the right of the HuePop brand image.
+
+REMOTE ARTWORK CATALOG
+- App catalog URL: https://bigupstar.com/huepop/artwork/artworks.json
+- Artwork thumbnails and coloring source PNGs are loaded from URLs in the JSON catalog.
+- Coloring PNGs are cached in application support storage after first download.
+- Add/edit artwork by changing artworks.json; no app rebuild is needed for catalog additions.
+- Starter upload file included at server/artwork/artworks.json.
+
+LIBRARY FILTERS
+- Search by title/category.
+- Age filters: All Ages, Kids, Teens, Adults.
+- Dynamic category filters generated from artworks.json.
+
+LIFETIME PREMIUM
+- One non-consumable purchase unlocks all current/future premium content.
+- Premium status unlocks every artwork with "premium": true in artworks.json.
+- Glitter brush/fill and Stickers are premium-gated.
+- Premium page explains lifetime entitlement before purchase and confirms it after purchase.
+- Restore Purchases is available.
+- Debug builds include a developer premium preview switch.
+
+IAP PLACEHOLDER PRODUCT IDS
+- iOS: com.huepop.app.premium_lifetime
+- Android: huepop_premium_lifetime
+- Configure the store products at $4.99 before production release.
+- These are purchase product IDs, not the app bundle/application ID.
+
+STICKERS
+- Sticker system is implemented and premium-gated.
+- Emoji stickers remain as temporary placeholder sticker content until final PNG sticker packs are supplied.
+
+BEFORE RUNNING
+1. Upload server/artwork/artworks.json to /public_html/huepop/artwork/artworks.json.
+2. Verify https://bigupstar.com/huepop/artwork/artworks.json opens publicly and returns JSON.
+3. Run: flutter clean
+4. Run: flutter pub get
+5. Run: flutter analyze
+6. Run the Android emulator using the working -gpu host setup.
+7. Run: flutter run -d emulator-5554
+
+STORE RELEASE
+- Register the non-consumable/lifetime product in App Store Connect and Google Play Console.
+- Set its price to USD $4.99 (storefront/local pricing may vary).
+- If you choose different product IDs, update lib/services/huepop_config.dart before store registration/release.
+- For stronger production entitlement security, add server-side receipt/purchase validation later.
