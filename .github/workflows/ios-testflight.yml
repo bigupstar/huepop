@@ -1,0 +1,283 @@
+name: HuePop iOS TestFlight
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-upload:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze HuePop
+        run: flutter analyze
+
+      # ---------------------------------------------------------
+      # APPLE DISTRIBUTION CERTIFICATE
+      # ---------------------------------------------------------
+
+      - name: Decode Apple Distribution certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        run: |
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/huepop_distribution.p12"
+
+      - name: Import certificate into temporary keychain
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/huepop.keychain-db"
+          KEYCHAIN_PASSWORD="huepop-temporary-keychain-password"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+
+          security unlock-keychain \
+            -p "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security import "$RUNNER_TEMP/huepop_distribution.p12" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          security list-keychains \
+            -d user \
+            -s "$KEYCHAIN_PATH" login.keychain-db
+
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          echo "Installed signing identities:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      # ---------------------------------------------------------
+      # HUEPOP PROVISIONING PROFILE
+      # ---------------------------------------------------------
+
+      - name: Install HuePop provisioning profile
+        env:
+          PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          PROFILE_FILE="$RUNNER_TEMP/huepop.mobileprovision"
+
+          echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_FILE"
+
+          security cms -D \
+            -i "$PROFILE_FILE" \
+            > "$RUNNER_TEMP/profile.plist"
+
+          PROFILE_UUID=$(
+            /usr/libexec/PlistBuddy \
+            -c "Print :UUID" \
+            "$RUNNER_TEMP/profile.plist"
+          )
+
+          PROFILE_NAME=$(
+            /usr/libexec/PlistBuddy \
+            -c "Print :Name" \
+            "$RUNNER_TEMP/profile.plist"
+          )
+
+          TEAM_ID=$(
+            /usr/libexec/PlistBuddy \
+            -c "Print :TeamIdentifier:0" \
+            "$RUNNER_TEMP/profile.plist"
+          )
+
+          mkdir -p \
+            "$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          cp "$PROFILE_FILE" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
+
+          echo "Profile Name: $PROFILE_NAME"
+          echo "Profile UUID: $PROFILE_UUID"
+          echo "Apple Team ID: $TEAM_ID"
+
+      # ---------------------------------------------------------
+      # CONFIGURE XCODE RUNNER TARGET
+      # ---------------------------------------------------------
+
+      - name: Configure Runner distribution signing
+        run: |
+          sudo gem install xcodeproj --no-document
+
+          ruby <<'RUBY'
+          require 'xcodeproj'
+
+          project_path = 'ios/Runner.xcodeproj'
+          project = Xcodeproj::Project.open(project_path)
+
+          target = project.targets.find { |t| t.name == 'Runner' }
+
+          abort "Runner target not found" unless target
+
+          target.build_configurations.each do |config|
+
+            next unless ['Release', 'Profile'].include?(config.name)
+
+            config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] =
+              'com.hue-pop.app'
+
+            config.build_settings['CODE_SIGN_STYLE'] =
+              'Manual'
+
+            config.build_settings['DEVELOPMENT_TEAM'] =
+              ENV['APPLE_TEAM_ID']
+
+            config.build_settings['CODE_SIGN_IDENTITY'] =
+              'Apple Distribution'
+
+            config.build_settings['PROVISIONING_PROFILE_SPECIFIER'] =
+              ENV['PROFILE_NAME']
+          end
+
+          project.save
+
+          puts "HuePop Runner signing configured."
+          RUBY
+
+      # ---------------------------------------------------------
+      # EXPORT OPTIONS
+      # ---------------------------------------------------------
+
+      - name: Create ExportOptions.plist
+        run: |
+          cat > ios/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+          "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+
+            <key>method</key>
+            <string>app-store-connect</string>
+
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+
+            <key>signingStyle</key>
+            <string>manual</string>
+
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.hue-pop.app</key>
+              <string>${PROFILE_NAME}</string>
+            </dict>
+
+            <key>uploadSymbols</key>
+            <true/>
+
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+
+          </dict>
+          </plist>
+          EOF
+
+          cat ios/ExportOptions.plist
+
+      # ---------------------------------------------------------
+      # BUILD IPA
+      # ---------------------------------------------------------
+
+      - name: Build signed HuePop IPA
+        run: |
+          flutter build ipa \
+            --release \
+            --build-number=${{ github.run_number }} \
+            --export-options-plist=ios/ExportOptions.plist
+
+      - name: Locate generated IPA
+        run: |
+          echo "Generated IPA files:"
+          find build/ios/ipa \
+            -type f \
+            -name "*.ipa" \
+            -print
+
+      # ---------------------------------------------------------
+      # SAVE COPY IN GITHUB
+      # ---------------------------------------------------------
+
+      - name: Upload IPA as GitHub artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HuePop-iOS-Build-${{ github.run_number }}
+          path: build/ios/ipa/*.ipa
+          retention-days: 14
+
+      # ---------------------------------------------------------
+      # APP STORE CONNECT API KEY
+      # ---------------------------------------------------------
+
+      - name: Prepare App Store Connect API key
+        env:
+          API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+        run: |
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+
+          echo "$API_KEY_BASE64" | base64 --decode \
+            > "$HOME/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8"
+
+          chmod 600 \
+            "$HOME/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8"
+
+      # ---------------------------------------------------------
+      # UPLOAD TO APP STORE CONNECT / TESTFLIGHT
+      # ---------------------------------------------------------
+
+      - name: Upload HuePop to App Store Connect
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
+        run: |
+          IPA_FILE=$(
+            find build/ios/ipa \
+            -type f \
+            -name "*.ipa" \
+            | head -1
+          )
+
+          if [ -z "$IPA_FILE" ]; then
+            echo "ERROR: HuePop IPA was not found."
+            exit 1
+          fi
+
+          echo "Uploading:"
+          echo "$IPA_FILE"
+
+          xcrun altool \
+            --upload-app \
+            --type ios \
+            --file "$IPA_FILE" \
+            --apiKey "$API_KEY_ID" \
+            --apiIssuer "$API_ISSUER_ID"
