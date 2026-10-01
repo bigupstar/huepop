@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -15,9 +16,10 @@ import '../state/huepop_app_state.dart';
 import '../utils/region_engine.dart';
 
 class EditorScreen extends StatefulWidget {
-  const EditorScreen({super.key, required this.artwork, required this.appState});
+  const EditorScreen({super.key, required this.artwork, required this.appState, this.localArtworkPath});
   final Artwork artwork;
   final HuePopAppState appState;
+  final String? localArtworkPath;
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -30,7 +32,6 @@ class _EditorScreenState extends State<EditorScreen> {
   RegionData? _regions;
   ui.Image? _fillImage;
   ui.Image? _outlineImage;
-  Uint8List? _artworkBytes;
   bool _loading = true;
   String? _error;
 
@@ -62,7 +63,7 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
-    final saved = widget.appState.savedState(widget.artwork.progressId);
+    final saved = widget.appState.savedState(widget.artwork.id);
     if (saved != null) {
       _actions.addAll(saved.actions);
       _background = saved.background;
@@ -78,10 +79,51 @@ class _EditorScreenState extends State<EditorScreen> {
     super.dispose();
   }
 
+  Future<RegionData> _loadRemoteRegionData() async {
+    final response = await http.get(Uri.parse(widget.artwork.imageUrl)).timeout(const Duration(seconds: 30));
+    if (response.statusCode < 200 || response.statusCode >= 300 || response.bodyBytes.isEmpty) {
+      throw HttpException('Unable to download artwork (HTTP ${response.statusCode}).');
+    }
+    return loadRegionDataFromBytes(response.bodyBytes);
+  }
+
+  Future<void> _premiumFeatureDialog(String feature) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.workspace_premium_rounded, color: huePopPurple, size: 40),
+        title: Text('$feature is a Premium feature'),
+        content: Text('Unlock HuePop Lifetime Premium to use $feature, premium artwork collections, and offline downloads.'),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+      ),
+    );
+  }
+
+  void _selectTool(EditorTool tool) {
+    final premiumTool = tool == EditorTool.glitter || tool == EditorTool.sticker;
+    if (premiumTool && !widget.appState.premiumUnlocked) {
+      _premiumFeatureDialog(tool == EditorTool.glitter ? 'Glitter' : 'Stickers');
+      return;
+    }
+    setState(() => _tool = tool);
+  }
+
+  void _selectFillStyle(FillStyle style) {
+    if (style == FillStyle.glitter && !widget.appState.premiumUnlocked) {
+      _premiumFeatureDialog('Glitter');
+      return;
+    }
+    setState(() {
+      _fillStyle = style;
+      _tool = EditorTool.fill;
+    });
+  }
+
   Future<void> _loadArtwork() async {
     try {
-      final encodedBytes = await widget.appState.artworkBytes(widget.artwork);
-      final regions = await loadRegionDataFromBytes(encodedBytes);
+      final regions = widget.localArtworkPath != null
+          ? await loadRegionDataFromBytes(await File(widget.localArtworkPath!).readAsBytes())
+          : await _loadRemoteRegionData();
       final outlinePixels = Uint8List(regions.width * regions.height * 4);
       for (var i = 0; i < regions.width * regions.height; i++) {
         final p = i * 4;
@@ -101,7 +143,6 @@ class _EditorScreenState extends State<EditorScreen> {
       setState(() {
         _regions = regions;
         _outlineImage = outline;
-        _artworkBytes = encodedBytes;
       });
       await _rebuildFillImage();
       if (!mounted) return;
@@ -234,7 +275,7 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<void> _autoSave() async {
     setState(() => _saving = true);
     await widget.appState.saveArtwork(
-      widget.artwork.progressId,
+      widget.artwork.id,
       SavedArtworkState(actions: List<EditAction>.from(_actions), background: _background, updatedAt: DateTime.now(), progress: _progress),
     );
     if (mounted) setState(() => _saving = false);
@@ -260,6 +301,10 @@ class _EditorScreenState extends State<EditorScreen> {
         }
         break;
       case EditorTool.sticker:
+        if (!widget.appState.premiumUnlocked) {
+          _premiumFeatureDialog('Stickers');
+          return;
+        }
         _addAction(StickerAction(emoji: _selectedSticker, x: point.x, y: point.y, size: 42));
         break;
       case EditorTool.eraser:
@@ -287,6 +332,10 @@ class _EditorScreenState extends State<EditorScreen> {
       }.contains(_tool);
 
   void _panStart(DragStartDetails details, Size size) {
+    if (_tool == EditorTool.glitter && !widget.appState.premiumUnlocked) {
+      _premiumFeatureDialog('Glitter');
+      return;
+    }
     if (!_isStrokeTool || size.width <= 0 || size.height <= 0) return;
     final p = PointData(details.localPosition.dx / size.width, details.localPosition.dy / size.height, _lastPressure);
     _activeStrokeRegion = _edgeProtection ? _regionAt(p) : null;
@@ -380,56 +429,33 @@ class _EditorScreenState extends State<EditorScreen> {
     return ((pressure - min) / (max - min)).clamp(.2, 1.0).toDouble();
   }
 
-  void _selectTool(EditorTool tool) {
-    if ((tool == EditorTool.glitter || tool == EditorTool.sticker) && !widget.appState.premiumUnlocked) {
-      _showPremiumRequired();
-      return;
-    }
-    setState(() => _tool = tool);
-  }
-
-  Future<void> _showPremiumRequired() async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Lifetime Premium feature'),
-        content: Text('Glitter and Stickers are included with HuePop Lifetime Premium, along with every premium artwork and future premium additions. One purchase is ${widget.appState.premiumPrice}.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Not now')),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(context);
-              widget.appState.buyLifetimePremium();
-            },
-            child: Text('Unlock • ${widget.appState.premiumPrice}'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
+    final compactPhone = MediaQuery.sizeOf(context).width < 600;
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 4,
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(widget.artwork.title, style: const TextStyle(fontWeight: FontWeight.w800)),
-          Text('${(_progress * 100).round()}% colored', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400)),
+          Text(widget.artwork.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w800, fontSize: compactPhone ? 16 : 20)),
+          Text('${(_progress * 100).round()}% colored', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w400)),
         ]),
         actions: [
-          if (_saving) const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)))),
+          if (_saving) const Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Center(child: SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2)))),
           IconButton(tooltip: 'Undo', onPressed: _actions.isEmpty ? null : _undo, icon: const Icon(Icons.undo)),
           IconButton(tooltip: 'Redo', onPressed: _redo.isEmpty ? null : _redoAction, icon: const Icon(Icons.redo)),
-          IconButton(tooltip: 'Show original', onPressed: () => setState(() => _showReference = !_showReference), icon: Icon(_showReference ? Icons.visibility : Icons.visibility_outlined)),
-          IconButton(tooltip: 'Reset zoom', onPressed: () => _transformController.value = Matrix4.identity(), icon: const Icon(Icons.center_focus_strong)),
+          if (!compactPhone) IconButton(tooltip: 'Show original', onPressed: () => setState(() => _showReference = !_showReference), icon: Icon(_showReference ? Icons.visibility : Icons.visibility_outlined)),
+          if (!compactPhone) IconButton(tooltip: 'Reset zoom', onPressed: () => _transformController.value = Matrix4.identity(), icon: const Icon(Icons.center_focus_strong)),
           IconButton(tooltip: 'Save & share', onPressed: _exportAndShare, icon: const Icon(Icons.ios_share)),
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'clear') _clearMenu();
               if (value == 'favorite') widget.appState.toggleFavorite(widget.artwork.id);
+              if (value == 'reference') setState(() => _showReference = !_showReference);
+              if (value == 'zoom') _transformController.value = Matrix4.identity();
             },
             itemBuilder: (_) => [
+              if (compactPhone) PopupMenuItem(value: 'reference', child: Text(_showReference ? 'Hide original' : 'Show original')),
+              if (compactPhone) const PopupMenuItem(value: 'zoom', child: Text('Reset zoom')),
               PopupMenuItem(value: 'favorite', child: Text(widget.appState.favorites.contains(widget.artwork.id) ? 'Remove favorite' : 'Add to favorites')),
               const PopupMenuItem(value: 'clear', child: Text('Clear…')),
             ],
@@ -443,12 +469,7 @@ class _EditorScreenState extends State<EditorScreen> {
               : LayoutBuilder(builder: (context, constraints) {
                   final wide = constraints.maxWidth >= 900;
                   final editor = Column(children: [
-                    if (!wide) _MobileToolBar(
-                      selected: _tool,
-                      premiumUnlocked: widget.appState.premiumUnlocked,
-                      onPremiumRequired: _showPremiumRequired,
-                      onSelected: _selectTool,
-                    ),
+                    if (!wide) _MobileToolBar(selected: _tool, premiumUnlocked: widget.appState.premiumUnlocked, onSelected: _selectTool),
                     Expanded(child: _buildCanvas()),
                     _BottomControls(
                       color: _color,
@@ -467,33 +488,14 @@ class _EditorScreenState extends State<EditorScreen> {
                       onOpacity: (value) => setState(() => _opacity = value),
                       onHardness: (value) => setState(() => _hardness = value),
                       onEdgeProtection: (value) => setState(() => _edgeProtection = value),
-                      premiumUnlocked: widget.appState.premiumUnlocked,
-                      onPremiumRequired: _showPremiumRequired,
-                      onFillStyle: (value) {
-                        if (value == FillStyle.glitter && !widget.appState.premiumUnlocked) {
-                          _showPremiumRequired();
-                          return;
-                        }
-                        setState(() { _fillStyle = value; _tool = EditorTool.fill; });
-                      },
+                      onFillStyle: _selectFillStyle,
                       onBackground: (value) { setState(() => _background = value); _autoSave(); },
-                      onSticker: () {
-                        if (!widget.appState.premiumUnlocked) {
-                          _showPremiumRequired();
-                        } else {
-                          _showStickerPicker();
-                        }
-                      },
+                      onSticker: _showStickerPicker,
                     ),
                   ]);
                   if (!wide) return editor;
                   return Row(children: [
-                    _DesktopToolRail(
-                        selected: _tool,
-                        premiumUnlocked: widget.appState.premiumUnlocked,
-                        onPremiumRequired: _showPremiumRequired,
-                        onSelected: _selectTool,
-                      ),
+                    _DesktopToolRail(selected: _tool, premiumUnlocked: widget.appState.premiumUnlocked, onSelected: _selectTool),
                     Expanded(child: editor),
                   ]);
                 }),
@@ -504,7 +506,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final regions = _regions!;
     return Container(
       color: const Color(0xFFE8E6ED),
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 600 ? 6 : 12),
       child: Center(
         child: InteractiveViewer(
           transformationController: _transformController,
@@ -534,24 +536,14 @@ class _EditorScreenState extends State<EditorScreen> {
                       CustomPaint(
                         painter: _PaintLayerPainter(fillImage: _fillImage, actions: [..._actions, if (_draftStroke != null) _draftStroke!]),
                       ),
-                   if (_showReference && _artworkBytes != null)
-  Image.memory(
-    _artworkBytes!,
-    fit: BoxFit.fill,
-  )
-else if (!_showReference && _outlineImage != null)
-  RawImage(
-    image: _outlineImage,
-    fit: BoxFit.fill,
-    filterQuality: FilterQuality.high,
-  ),
-
-if (!_showReference)
-  CustomPaint(
-    painter: _StickerPainter(
-      _actions.whereType<StickerAction>().toList(),
-    ),
-  ),
+                    if (_showReference)
+                      widget.localArtworkPath != null
+                          ? Image.file(File(widget.localArtworkPath!), fit: BoxFit.fill, errorBuilder: (_, __, ___) => Image.network(widget.artwork.imageUrl, fit: BoxFit.fill))
+                          : Image.network(widget.artwork.imageUrl, fit: BoxFit.fill)
+                    else if (_outlineImage != null)
+                      RawImage(image: _outlineImage, fit: BoxFit.fill, filterQuality: FilterQuality.high),
+                    if (!_showReference)
+                      CustomPaint(painter: _StickerPainter(_actions.whereType<StickerAction>().toList())),
                   ]),
                 ),
               ),
@@ -671,6 +663,10 @@ if (!_showReference)
   }
 
   Future<void> _showStickerPicker() async {
+    if (!widget.appState.premiumUnlocked) {
+      await _premiumFeatureDialog('Stickers');
+      return;
+    }
     const stickers = <String>['✨', '⭐', '💖', '🌸', '🌈', '🦋', '☁️', '🌻', '🍀', '🎈', '👑', '🐾'];
     final selected = await showModalBottomSheet<String>(
       context: context,
@@ -844,73 +840,34 @@ class _StickerPainter extends CustomPainter {
 }
 
 class _DesktopToolRail extends StatelessWidget {
-  const _DesktopToolRail({
-    required this.selected,
-    required this.onSelected,
-    required this.premiumUnlocked,
-    required this.onPremiumRequired,
-  });
+  const _DesktopToolRail({required this.selected, required this.premiumUnlocked, required this.onSelected});
   final EditorTool selected;
-  final ValueChanged<EditorTool> onSelected;
   final bool premiumUnlocked;
-  final VoidCallback onPremiumRequired;
-
+  final ValueChanged<EditorTool> onSelected;
   @override
   Widget build(BuildContext context) => Container(
         width: 88,
         color: Colors.white,
-        child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          children: _toolButtons(
-            selected,
-            onSelected,
-            premiumUnlocked: premiumUnlocked,
-            onPremiumRequired: onPremiumRequired,
-            vertical: true,
-          ),
-        ),
+        child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: _toolButtons(selected, onSelected, premiumUnlocked: premiumUnlocked, vertical: true)),
       );
 }
 
 class _MobileToolBar extends StatelessWidget {
-  const _MobileToolBar({
-    required this.selected,
-    required this.onSelected,
-    required this.premiumUnlocked,
-    required this.onPremiumRequired,
-  });
+  const _MobileToolBar({required this.selected, required this.premiumUnlocked, required this.onSelected});
   final EditorTool selected;
-  final ValueChanged<EditorTool> onSelected;
   final bool premiumUnlocked;
-  final VoidCallback onPremiumRequired;
-
+  final ValueChanged<EditorTool> onSelected;
   @override
   Widget build(BuildContext context) => SizedBox(
         height: 68,
         child: Material(
           color: Colors.white,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            children: _toolButtons(
-              selected,
-              onSelected,
-              premiumUnlocked: premiumUnlocked,
-              onPremiumRequired: onPremiumRequired,
-              vertical: false,
-            ),
-          ),
+          child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 8), children: _toolButtons(selected, onSelected, premiumUnlocked: premiumUnlocked, vertical: false)),
         ),
       );
 }
 
-List<Widget> _toolButtons(
-  EditorTool selected,
-  ValueChanged<EditorTool> onSelected, {
-  required bool vertical,
-  required bool premiumUnlocked,
-  required VoidCallback onPremiumRequired,
-}) {
+List<Widget> _toolButtons(EditorTool selected, ValueChanged<EditorTool> onSelected, {required bool premiumUnlocked, required bool vertical}) {
   const tools = <(EditorTool, IconData, String)>[
     (EditorTool.fill, Icons.format_color_fill, 'Fill'),
     (EditorTool.brush, Icons.brush, 'Brush'),
@@ -928,10 +885,9 @@ List<Widget> _toolButtons(
   ];
   return tools.map((item) {
     final active = item.$1 == selected;
-    final premiumTool = item.$1 == EditorTool.glitter || item.$1 == EditorTool.sticker;
-    final locked = premiumTool && !premiumUnlocked;
-    return InkWell(
-      onTap: locked ? onPremiumRequired : () => onSelected(item.$1),
+    final locked = !premiumUnlocked && (item.$1 == EditorTool.glitter || item.$1 == EditorTool.sticker);
+    final content = InkWell(
+      onTap: () => onSelected(item.$1),
       borderRadius: BorderRadius.circular(14),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
@@ -939,19 +895,18 @@ List<Widget> _toolButtons(
         height: vertical ? 66 : 60,
         margin: const EdgeInsets.all(4),
         decoration: BoxDecoration(color: active ? const Color(0xFFECE4FF) : Colors.transparent, borderRadius: BorderRadius.circular(14)),
-        child: Stack(children: [
-          Center(
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(item.$2, color: active ? huePopPurple : Colors.black54),
-              const SizedBox(height: 3),
-              Text(item.$3, style: TextStyle(fontSize: 10, fontWeight: active ? FontWeight.w800 : FontWeight.w500, color: active ? huePopPurple : Colors.black54)),
-            ]),
-          ),
-          if (locked)
-            const Positioned(right: 5, top: 5, child: Icon(Icons.lock, size: 13, color: huePopPurple)),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Stack(clipBehavior: Clip.none, children: [
+            Icon(item.$2, color: active ? huePopPurple : Colors.black54),
+            if (locked)
+              const Positioned(right: -8, top: -8, child: Icon(Icons.lock_rounded, size: 13, color: huePopPurple)),
+          ]),
+          const SizedBox(height: 3),
+          Text(item.$3, style: TextStyle(fontSize: 10, fontWeight: active ? FontWeight.w800 : FontWeight.w500, color: active ? huePopPurple : Colors.black54)),
         ]),
       ),
     );
+    return content;
   }).toList();
 }
 
@@ -976,8 +931,6 @@ class _BottomControls extends StatelessWidget {
     required this.onFillStyle,
     required this.onBackground,
     required this.onSticker,
-    required this.premiumUnlocked,
-    required this.onPremiumRequired,
   });
   final Color color;
   final List<Color> quickColors;
@@ -998,8 +951,6 @@ class _BottomControls extends StatelessWidget {
   final ValueChanged<FillStyle> onFillStyle;
   final ValueChanged<BackgroundStyle> onBackground;
   final VoidCallback onSticker;
-  final bool premiumUnlocked;
-  final VoidCallback onPremiumRequired;
 
   @override
   Widget build(BuildContext context) {
@@ -1055,13 +1006,13 @@ class _BottomControls extends StatelessWidget {
               Center(child: PopupMenuButton<FillStyle>(
                 tooltip: 'Fill style',
                 onSelected: onFillStyle,
-                itemBuilder: (_) => FillStyle.values.map((s) {
-                  final locked = s == FillStyle.glitter && !premiumUnlocked;
-                  return PopupMenuItem(value: s, child: Row(children: [
+                itemBuilder: (_) => FillStyle.values.map((s) => PopupMenuItem(
+                  value: s,
+                  child: Row(children: [
                     Expanded(child: Text(_pretty(s.name))),
-                    if (locked) const Icon(Icons.lock, size: 16, color: huePopPurple),
-                  ]));
-                }).toList(),
+                    if (s == FillStyle.glitter && !appState.premiumUnlocked) const Icon(Icons.lock_rounded, size: 16, color: huePopPurple),
+                  ]),
+                )).toList(),
                 child: Chip(avatar: const Icon(Icons.gradient, size: 18), label: Text(_pretty(fillStyle.name))),
               )),
               const SizedBox(width: 8),
@@ -1071,10 +1022,7 @@ class _BottomControls extends StatelessWidget {
                 itemBuilder: (_) => BackgroundStyle.values.map((s) => PopupMenuItem(value: s, child: Text(_pretty(s.name)))).toList(),
                 child: Chip(avatar: const Icon(Icons.landscape_outlined, size: 18), label: Text(_pretty(background.name))),
               )),
-              Center(child: Stack(children: [
-                IconButton(tooltip: premiumUnlocked ? 'Choose sticker' : 'Premium: Stickers', onPressed: premiumUnlocked ? onSticker : onPremiumRequired, icon: const Icon(Icons.emoji_emotions_outlined)),
-                if (!premiumUnlocked) const Positioned(right: 4, top: 4, child: Icon(Icons.lock, size: 12, color: huePopPurple)),
-              ])),
+              Center(child: Stack(clipBehavior: Clip.none, children: [IconButton(tooltip: 'Choose sticker', onPressed: onSticker, icon: const Icon(Icons.emoji_emotions_outlined)), if (!appState.premiumUnlocked) const Positioned(right: 2, top: 2, child: Icon(Icons.lock_rounded, size: 14, color: huePopPurple))])),
             ]),
           ),
         ]),

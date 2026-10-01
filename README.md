@@ -1,19 +1,33 @@
-# HuePop
+# HuePop 0.2.2 - Color Cloud + Premium Creative Tools
 
-HuePop is a Flutter coloring studio for Android and iOS with smart region fill, brushes, palettes, undo/redo, zoom/pan, autosave, remote artwork catalogs, and lifetime premium content.
+This build keeps HuePop tablet-first while supporting phones and offline coloring.
 
-## Production content root
+## Artwork source
+HuePop loads its live catalog from the HuePop Color Cloud. Artwork images are remote and are not bundled in the app.
 
-- Web root: `https://bigupstar.com/huepop/`
-- Artwork directory: `https://bigupstar.com/huepop/artwork/`
-- Catalog: `https://bigupstar.com/huepop/artwork/artworks.json`
+The Profile screen intentionally displays only:
+- Artwork Refresh
+- Huepop Color Cloud
 
-The catalog is dynamic. Adding an artwork to `artworks.json` makes it available to the app without a new app build.
+The production catalog URL remains internal to app configuration.
 
-## Premium
+## Premium features in this build
+- Premium artwork access based on the catalog `premium` flag
+- Up to 5 offline artwork downloads
+- Glitter brush
+- Glitter fill style
+- Stickers
 
-HuePop Lifetime Premium is designed as a one-time non-consumable in-app purchase. Premium unlocks all catalog items with `premium: true`, plus Glitter, Stickers, and future premium additions.
+Free users can see Glitter and Stickers with lock indicators. Attempting to use either displays the Premium prompt.
 
-Placeholder product IDs are configured in `lib/services/huepop_config.dart` and must be registered in App Store Connect / Google Play before release.
+## Branding
+- `assets/app-icon.png` is the launcher/store icon source
+- `assets/brand-image.png` is used in HuePop branding and splash/header UI
 
-See `BUILD_NOTES.txt` and `server/artwork/README_UPLOAD.txt`.
+## Local build
+```powershell
+flutter clean
+flutter pub get
+flutter analyze
+flutter build apk --debug
+```

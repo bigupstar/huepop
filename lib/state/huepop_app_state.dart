@@ -1,42 +1,48 @@
-import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/artwork.dart';
 import '../models/editor_models.dart';
-import '../services/artwork_cache_service.dart';
-import '../services/catalog_service.dart';
 import '../services/huepop_config.dart';
 
+enum OfflineDownloadResult {
+  downloaded,
+  alreadyDownloaded,
+  premiumRequired,
+  limitReached,
+  failed,
+}
+
 class HuePopAppState extends ChangeNotifier {
-  static const String _premiumKey = 'huepop.premium.lifetime';
+  static const String _premiumKey = 'huepop.premium.preview';
   static const String _favoritesKey = 'huepop.favorites';
   static const String _recentColorsKey = 'huepop.recentColors';
   static const String _favoriteColorsKey = 'huepop.favoriteColors';
+  static const String _offlineIdsKey = 'huepop.offline.ids';
+  static const String _catalogCacheKey = 'huepop.catalog.cache.v2';
 
-  final CatalogService _catalogService = const CatalogService();
-  final ArtworkCacheService _artworkCache = const ArtworkCacheService();
-  final InAppPurchase _iap = InAppPurchase.instance;
+  static const int maxOfflineDownloads = 5;
 
   SharedPreferences? _prefs;
-  StreamSubscription<List<PurchaseDetails>>? _purchaseSubscription;
+  Directory? _offlineDirectory;
 
   bool initialized = false;
   bool premiumUnlocked = false;
-  bool catalogLoading = true;
+  bool catalogRefreshing = false;
   String? catalogError;
-  List<Artwork> artworks = <Artwork>[];
-
-  bool storeAvailable = false;
-  bool purchasePending = false;
-  String? storeMessage;
-  ProductDetails? premiumProduct;
-
+  DateTime? catalogLastUpdated;
+  final List<Artwork> artworks = <Artwork>[];
   final Set<String> favorites = <String>{};
   final List<int> recentColors = <int>[];
   final Set<int> favoriteColors = <int>{};
+  final Set<String> offlineArtworkIds = <String>{};
+  final Map<String, String> _offlinePaths = <String, String>{};
+  int offlineStorageBytes = 0;
 
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
@@ -55,161 +61,85 @@ class HuePopAppState extends ChangeNotifier {
           .map(int.tryParse)
           .whereType<int>());
 
-    _purchaseSubscription = _iap.purchaseStream.listen(
-      _handlePurchases,
-      onError: (Object error) {
-        storeMessage = 'Store error: $error';
-        purchasePending = false;
-        notifyListeners();
-      },
-    );
+    final support = await getApplicationSupportDirectory();
+    _offlineDirectory = Directory('${support.path}${Platform.pathSeparator}huepop_offline');
+    await _offlineDirectory!.create(recursive: true);
+
+    offlineArtworkIds
+      ..clear()
+      ..addAll(_prefs!.getStringList(_offlineIdsKey) ?? const <String>[]);
+
+    _loadCachedCatalog();
+    await _reconcileOfflineFiles();
 
     initialized = true;
     notifyListeners();
-
-    await Future.wait<void>([
-      refreshCatalog(),
-      _initializeStore(),
-    ]);
+    await refreshCatalog(silent: true);
   }
 
-  @override
-  void dispose() {
-    _purchaseSubscription?.cancel();
-    super.dispose();
-  }
-
-  Future<void> refreshCatalog() async {
-    catalogLoading = true;
-    catalogError = null;
-    notifyListeners();
+  void _loadCachedCatalog() {
+    final cached = _prefs?.getString(_catalogCacheKey);
+    if (cached == null || cached.isEmpty) return;
     try {
-      artworks = await _catalogService.loadCatalog();
-    } catch (error) {
-      catalogError = '$error';
-      artworks = <Artwork>[];
-    } finally {
-      catalogLoading = false;
-      notifyListeners();
+      final decoded = jsonDecode(cached);
+      if (decoded is! List) return;
+      artworks
+        ..clear()
+        ..addAll(decoded.whereType<Map>().map((item) => Artwork.fromJson(
+              Map<String, dynamic>.from(item),
+              catalogUri: HuePopConfig.catalogUri,
+            )));
+    } catch (_) {
+      // A damaged cache is ignored; the cloud refresh below can replace it.
     }
   }
 
-  Future<Uint8List> artworkBytes(Artwork artwork) => _artworkCache.loadBytes(artwork);
+  Future<bool> refreshCatalog({bool silent = false}) async {
+    if (catalogRefreshing) return false;
+    catalogRefreshing = true;
+    catalogError = null;
+    if (!silent) notifyListeners();
+    try {
+      final response = await http.get(HuePopConfig.catalogUri).timeout(const Duration(seconds: 20));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('Color Cloud returned HTTP ${response.statusCode}.');
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! List) throw const FormatException('Color Cloud catalog is not a list.');
+      final loaded = decoded
+          .whereType<Map>()
+          .map((item) => Artwork.fromJson(Map<String, dynamic>.from(item), catalogUri: HuePopConfig.catalogUri))
+          .where((artwork) => artwork.imageUrl.isNotEmpty)
+          .toList();
+      if (loaded.isEmpty) throw const FormatException('Color Cloud returned no artwork.');
+      artworks
+        ..clear()
+        ..addAll(loaded);
+      await _prefs?.setString(_catalogCacheKey, response.body);
+      catalogLastUpdated = DateTime.now();
+      await _reconcileOfflineFiles();
+      return true;
+    } catch (e) {
+      catalogError = '$e';
+      return false;
+    } finally {
+      catalogRefreshing = false;
+      notifyListeners();
+    }
+  }
 
   Artwork? get dailyChallenge {
     if (artworks.isEmpty) return null;
-    final free = artworks.where((artwork) => !artwork.isPremium).toList();
-    final pool = free.isEmpty ? artworks : free;
     final day = DateTime.now().difference(DateTime(2026, 1, 1)).inDays.abs();
-    return pool[day % pool.length];
+    return artworks[day % artworks.length];
   }
 
-  bool canOpen(Artwork artwork) => !artwork.isPremium || premiumUnlocked;
+  bool canOpen(Artwork artwork) => !artwork.isPremium || premiumUnlocked || isOffline(artwork.id);
 
-  String get premiumPrice => premiumProduct?.price ?? HuePopConfig.premiumFallbackPrice;
-
-  Future<void> _initializeStore() async {
-    try {
-      storeAvailable = await _iap.isAvailable();
-      if (!storeAvailable) {
-        storeMessage = 'The App Store / Play Store is not available on this device.';
-        notifyListeners();
-        return;
-      }
-      final response = await _iap.queryProductDetails(<String>{HuePopConfig.premiumProductId});
-      if (response.error != null) storeMessage = response.error!.message;
-      if (response.productDetails.isNotEmpty) {
-        premiumProduct = response.productDetails.first;
-        storeMessage = null;
-      } else {
-        storeMessage = 'Premium product is not registered in the store yet.';
-      }
-      notifyListeners();
-    } catch (error) {
-      storeMessage = 'Could not connect to the store: $error';
-      notifyListeners();
-    }
-  }
-
-  Future<void> buyLifetimePremium() async {
-    if (premiumUnlocked || purchasePending) return;
-    final product = premiumProduct;
-    if (!storeAvailable || product == null) {
-      storeMessage = 'Premium purchase is not available yet. Register ${HuePopConfig.premiumProductId} in the store first.';
-      notifyListeners();
-      return;
-    }
-    purchasePending = true;
-    storeMessage = null;
-    notifyListeners();
-    try {
-      final started = await _iap.buyNonConsumable(
-        purchaseParam: PurchaseParam(productDetails: product),
-      );
-      if (!started) {
-        purchasePending = false;
-        storeMessage = 'The purchase could not be started.';
-        notifyListeners();
-      }
-    } catch (error) {
-      purchasePending = false;
-      storeMessage = 'Purchase error: $error';
-      notifyListeners();
-    }
-  }
-
-  Future<void> restorePremium() async {
-    storeMessage = 'Checking previous purchases…';
-    notifyListeners();
-    try {
-      await _iap.restorePurchases();
-    } catch (error) {
-      storeMessage = 'Restore error: $error';
-      notifyListeners();
-    }
-  }
-
-  Future<void> _handlePurchases(List<PurchaseDetails> purchases) async {
-    for (final purchase in purchases) {
-      if (purchase.productID != HuePopConfig.premiumProductId) continue;
-      switch (purchase.status) {
-        case PurchaseStatus.pending:
-          purchasePending = true;
-          storeMessage = 'Purchase pending…';
-          break;
-        case PurchaseStatus.purchased:
-        case PurchaseStatus.restored:
-          await _setPremiumUnlocked(true);
-          purchasePending = false;
-          storeMessage = purchase.status == PurchaseStatus.restored
-              ? 'Lifetime Premium restored.'
-              : 'Lifetime Premium unlocked.';
-          break;
-        case PurchaseStatus.error:
-          purchasePending = false;
-          storeMessage = purchase.error?.message ?? 'Purchase failed.';
-          break;
-        case PurchaseStatus.canceled:
-          purchasePending = false;
-          storeMessage = 'Purchase canceled.';
-          break;
-      }
-      if (purchase.pendingCompletePurchase) {
-        await _iap.completePurchase(purchase);
-      }
-    }
-    notifyListeners();
-  }
-
-  Future<void> _setPremiumUnlocked(bool value) async {
+  Future<void> setPremiumPreview(bool value) async {
     premiumUnlocked = value;
     await _prefs?.setBool(_premiumKey, value);
     notifyListeners();
-  }
-
-  Future<void> setDeveloperPremiumPreview(bool value) async {
-    if (!kDebugMode) return;
-    await _setPremiumUnlocked(value);
   }
 
   Future<void> toggleFavorite(String artworkId) async {
@@ -259,10 +189,109 @@ class HuePopAppState extends ChangeNotifier {
   double progressFor(String artworkId) => savedState(artworkId)?.progress ?? 0;
 
   List<Artwork> get inProgress => artworks
-      .where((artwork) => hasProgress(artwork.progressId) && progressFor(artwork.progressId) < .995)
+      .where((artwork) => hasProgress(artwork.id) && progressFor(artwork.id) < .995)
       .toList();
 
   List<Artwork> get completed => artworks
-      .where((artwork) => progressFor(artwork.progressId) >= .995)
+      .where((artwork) => progressFor(artwork.id) >= .995)
       .toList();
+
+  List<Artwork> get offlineArtworks => artworks
+      .where((artwork) => offlineArtworkIds.contains(artwork.id))
+      .toList();
+
+  int get offlineCount => offlineArtworkIds.length;
+  int get offlineSlotsRemaining => maxOfflineDownloads - offlineCount;
+  bool get offlineLibraryFull => offlineCount >= maxOfflineDownloads;
+
+  bool isOffline(String artworkId) => offlineArtworkIds.contains(artworkId) && _offlinePaths.containsKey(artworkId);
+
+  String? offlinePathFor(String artworkId) => isOffline(artworkId) ? _offlinePaths[artworkId] : null;
+
+  String _offlineFilePath(Artwork artwork) {
+    final uri = Uri.tryParse(artwork.imageUrl);
+    final last = uri?.pathSegments.isNotEmpty == true ? uri!.pathSegments.last : '';
+    final extension = last.contains('.') ? last.split('.').last.toLowerCase() : 'png';
+    return '${_offlineDirectory!.path}${Platform.pathSeparator}${artwork.id}.$extension';
+  }
+
+  Future<OfflineDownloadResult> downloadForOffline(Artwork artwork) async {
+    if (!premiumUnlocked) return OfflineDownloadResult.premiumRequired;
+    if (isOffline(artwork.id)) return OfflineDownloadResult.alreadyDownloaded;
+    if (offlineLibraryFull) return OfflineDownloadResult.limitReached;
+    if (_offlineDirectory == null) return OfflineDownloadResult.failed;
+
+    try {
+      final response = await http.get(Uri.parse(artwork.imageUrl)).timeout(const Duration(seconds: 30));
+      if (response.statusCode < 200 || response.statusCode >= 300 || response.bodyBytes.isEmpty) {
+        return OfflineDownloadResult.failed;
+      }
+      final path = _offlineFilePath(artwork);
+      final file = File(path);
+      await file.writeAsBytes(response.bodyBytes, flush: true);
+      offlineArtworkIds.add(artwork.id);
+      _offlinePaths[artwork.id] = path;
+      await _prefs?.setStringList(_offlineIdsKey, offlineArtworkIds.toList());
+      await _refreshOfflineStorageSize();
+      notifyListeners();
+      return OfflineDownloadResult.downloaded;
+    } catch (_) {
+      return OfflineDownloadResult.failed;
+    }
+  }
+
+  Future<void> removeOffline(String artworkId) async {
+    final path = _offlinePaths[artworkId];
+    if (path != null) {
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
+    offlineArtworkIds.remove(artworkId);
+    _offlinePaths.remove(artworkId);
+    await _prefs?.setStringList(_offlineIdsKey, offlineArtworkIds.toList());
+    await _refreshOfflineStorageSize();
+    notifyListeners();
+  }
+
+  Future<void> _reconcileOfflineFiles() async {
+    if (_offlineDirectory == null) return;
+    final byId = <String, Artwork>{for (final artwork in artworks) artwork.id: artwork};
+    final valid = <String>{};
+    _offlinePaths.clear();
+    for (final id in offlineArtworkIds) {
+      final artwork = byId[id];
+      if (artwork == null) continue;
+      final path = _offlineFilePath(artwork);
+      if (await File(path).exists()) {
+        valid.add(id);
+        _offlinePaths[id] = path;
+      }
+    }
+    offlineArtworkIds
+      ..clear()
+      ..addAll(valid);
+    await _prefs?.setStringList(_offlineIdsKey, offlineArtworkIds.toList());
+    await _refreshOfflineStorageSize();
+  }
+
+  Future<void> _refreshOfflineStorageSize() async {
+    var total = 0;
+    for (final path in _offlinePaths.values) {
+      try {
+        total += await File(path).length();
+      } catch (_) {}
+    }
+    offlineStorageBytes = total;
+  }
+
+  String get formattedOfflineStorage {
+    final bytes = offlineStorageBytes;
+    if (bytes < 1024) return '$bytes B';
+    final kb = bytes / 1024;
+    if (kb < 1024) return '${kb.toStringAsFixed(1)} KB';
+    final mb = kb / 1024;
+    return '${mb.toStringAsFixed(1)} MB';
+  }
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 class RegionData {
   const RegionData({
@@ -37,13 +38,20 @@ class RegionData {
   }
 }
 
-Future<RegionData> loadRegionDataFromBytes(Uint8List encodedBytes, {int boundaryThreshold = 105}) async {
-  final codec = await ui.instantiateImageCodec(encodedBytes);
+Future<RegionData> loadRegionData(String assetPath, {int boundaryThreshold = 105}) async {
+  final byteData = await rootBundle.load(assetPath);
+  return loadRegionDataFromBytes(byteData.buffer.asUint8List(), boundaryThreshold: boundaryThreshold);
+}
+
+Future<RegionData> loadRegionDataFromBytes(Uint8List bytes, {int boundaryThreshold = 105}) async {
+  final codec = await ui.instantiateImageCodec(bytes);
   final frame = await codec.getNextFrame();
   final image = frame.image;
   final rgbaData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-  if (rgbaData == null) throw StateError('Unable to decode artwork pixels.');
-  final rgba = Uint8List.fromList(rgbaData.buffer.asUint8List());
+  if (rgbaData == null) {
+    throw StateError('Unable to decode artwork pixels.');
+  }
+  final rgba = rgbaData.buffer.asUint8List();
   final result = await compute(_labelRegions, <String, Object>{
     'pixels': rgba,
     'width': image.width,
@@ -69,7 +77,8 @@ Map<String, Object> _labelRegions(Map<String, Object> input) {
   final height = input['height']! as int;
   final threshold = input['threshold']! as int;
   final count = width * height;
-  final ids = Int32List(count)..fillRange(0, count, -2);
+  final ids = Int32List(count);
+  ids.fillRange(0, count, -2); // -2 unseen, -1 boundary, >=0 region.
 
   bool isBoundary(int index) {
     final p = index * 4;
@@ -134,6 +143,12 @@ Map<String, Object> _labelRegions(Map<String, Object> input) {
 
 Future<ui.Image> rgbaToImage(Uint8List rgba, int width, int height) {
   final completer = Completer<ui.Image>();
-  ui.decodeImageFromPixels(rgba, width, height, ui.PixelFormat.rgba8888, completer.complete);
+  ui.decodeImageFromPixels(
+    rgba,
+    width,
+    height,
+    ui.PixelFormat.rgba8888,
+    completer.complete,
+  );
   return completer.future;
 }

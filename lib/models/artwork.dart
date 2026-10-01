@@ -4,8 +4,8 @@ class Artwork {
   const Artwork({
     required this.id,
     required this.title,
-    required this.category,
     required this.imageUrl,
+    required this.collection,
     required this.ageGroup,
     required this.progressId,
     required this.sortOrder,
@@ -15,60 +15,32 @@ class Artwork {
 
   final String id;
   final String title;
-  final String category;
   final String imageUrl;
+  final String collection;
   final String ageGroup;
   final String progressId;
   final int sortOrder;
   final bool isPremium;
   final bool isNew;
 
-  factory Artwork.fromJson(Map<String, dynamic> json, {required Uri manifestUri}) {
-    final rawImage = (json['image_url'] ?? json['image'] ?? '').toString().trim();
-    final resolvedImage = rawImage.isEmpty ? '' : manifestUri.resolve(rawImage).toString();
-    final id = (json['id'] ?? json['progress_id'] ?? '').toString().trim();
+  factory Artwork.fromJson(Map<String, dynamic> json, {required Uri catalogUri}) {
+    final rawImage = (json['image_url'] ?? '').toString().trim();
+    final resolved = catalogUri.resolve(rawImage).toString();
+    final rawAge = (json['age_group'] ?? 'All').toString().trim();
+    final age = rawAge.isEmpty
+        ? 'All'
+        : '${rawAge[0].toUpperCase()}${rawAge.substring(1).toLowerCase()}';
     return Artwork(
-      id: id,
-      title: (json['title'] ?? id).toString(),
-      category: (json['category'] ?? 'Other').toString(),
-      imageUrl: resolvedImage,
-      ageGroup: _normalizeAgeGroup((json['age_group'] ?? 'Kids').toString()),
-      progressId: (json['progress_id'] ?? id).toString(),
-      sortOrder: _asInt(json['sort_order']),
-      isPremium: _asBool(json['premium']),
-      isNew: _asBool(json['new']),
+      id: (json['id'] ?? json['progress_id'] ?? resolved).toString(),
+      title: (json['title'] ?? 'Untitled Artwork').toString(),
+      imageUrl: resolved,
+      collection: (json['category'] ?? 'Other').toString(),
+      ageGroup: age,
+      progressId: (json['progress_id'] ?? json['id'] ?? '').toString(),
+      sortOrder: (json['sort_order'] is num) ? (json['sort_order'] as num).toInt() : 0,
+      isPremium: json['premium'] == true || json['premium']?.toString().toLowerCase() == 'true',
+      isNew: json['new'] == true || json['new']?.toString().toLowerCase() == 'true',
     );
-  }
-
-  static String _normalizeAgeGroup(String value) {
-    switch (value.trim().toLowerCase()) {
-      case 'kid':
-      case 'kids':
-      case 'child':
-      case 'children':
-        return 'Kids';
-      case 'teen':
-      case 'teens':
-        return 'Teens';
-      case 'adult':
-      case 'adults':
-        return 'Adults';
-      default:
-        return value.trim().isEmpty ? 'Kids' : value.trim();
-    }
-  }
-
-  static bool _asBool(dynamic value) {
-    if (value is bool) return value;
-    if (value is num) return value != 0;
-    final normalized = value?.toString().trim().toLowerCase();
-    return normalized == 'true' || normalized == '1' || normalized == 'yes';
-  }
-
-  static int _asInt(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 }
 

@@ -70,9 +70,9 @@ class _Splash extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.asset('assets/brand-image.png', width: 360, fit: BoxFit.contain),
-            const SizedBox(height: 24),
-            const CircularProgressIndicator(color: huePopPurple),
+            Image.asset('assets/brand-image.png', width: 300, fit: BoxFit.contain),
+            const SizedBox(height: 20),
+            const CircularProgressIndicator(),
           ],
         ),
       ),
