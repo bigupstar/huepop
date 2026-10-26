@@ -115,9 +115,11 @@ class _DirectPremiumPageState extends State<DirectPremiumPage> {
     try {
       final uri = await api.createCheckoutSession(token!);
       final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (mounted) setState(() => message = opened
-          ? 'After payment, return to HuePop and tap Refresh Premium.'
-          : 'Could not open Stripe Checkout.');
+if (mounted) {
+  setState(() => message = opened
+      ? 'After payment, return to HuePop and tap Refresh Premium.'
+      : 'Could not open Stripe Checkout.');
+}
     } on PremiumApiException catch (e) {
       if (mounted) setState(() => message = e.message);
     } finally {

@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -6,6 +6,7 @@ import '../models/artwork.dart';
 import '../services/huepop_config.dart';
 import '../state/huepop_app_state.dart';
 import 'editor_screen.dart';
+import 'direct_premium_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.appState});
@@ -34,7 +35,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _LibraryPage(appState: widget.appState),
       _DownloadsPage(appState: widget.appState),
       _MyArtworkPage(appState: widget.appState),
-      _StorePage(appState: widget.appState),
+      DirectPremiumPage(appState: widget.appState),
       _ProfilePage(appState: widget.appState),
     ];
 
@@ -138,7 +139,7 @@ class _DiscoverPage extends StatelessWidget {
                       const SizedBox(height: 12),
                       FilledButton.tonal(
                         onPressed: () => _openArtwork(context, appState, challenge),
-                        child: const Text('Start today’s challenge'),
+                        child: const Text('Start todayâ€™s challenge'),
                       ),
                     ]);
                     final art = ClipRRect(
@@ -208,12 +209,12 @@ class _LibraryPageState extends State<_LibraryPage> {
     }).toList();
 
     return Column(children: [
-      const _PageHeader(title: 'Library', subtitle: 'Find your next page to color — online or offline.'),
+      const _PageHeader(title: 'Library', subtitle: 'Find your next page to color â€” online or offline.'),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18),
         child: TextField(
           onChanged: (value) => setState(() => search = value),
-          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search artwork, collections…'),
+          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search artwork, collectionsâ€¦'),
         ),
       ),
       const SizedBox(height: 10),
@@ -260,7 +261,7 @@ class _DownloadsPage extends StatelessWidget {
       const SliverToBoxAdapter(
         child: _PageHeader(
           title: 'Downloads',
-          subtitle: 'Keep up to 5 coloring pages ready for trips and places without Wi‑Fi.',
+          subtitle: 'Keep up to 5 coloring pages ready for trips and places without Wiâ€‘Fi.',
         ),
       ),
       SliverToBoxAdapter(
@@ -372,67 +373,6 @@ class _MyArtworkPage extends StatelessWidget {
   }
 }
 
-class _StorePage extends StatelessWidget {
-  const _StorePage({required this.appState});
-  final HuePopAppState appState;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(padding: EdgeInsets.zero, children: [
-      const _PageHeader(title: 'HuePop Premium', subtitle: 'Premium packs, special collections and offline coloring.'),
-      Padding(
-        padding: const EdgeInsets.all(18),
-        child: Card(
-          color: const Color(0xFF211A33),
-          child: Padding(
-            padding: const EdgeInsets.all(22),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Icon(Icons.workspace_premium, size: 54, color: huePopGold),
-              const SizedBox(height: 12),
-              const Text('Unlock the full HuePop experience', style: TextStyle(color: Colors.white, fontSize: 25, fontWeight: FontWeight.w900)),
-              const SizedBox(height: 8),
-              const Text('Premium unlocks premium artwork plus up to 5 offline coloring-page downloads for travel and no-data situations.', style: TextStyle(color: Colors.white70, height: 1.4)),
-              const SizedBox(height: 14),
-              const _PremiumFeature(icon: Icons.download_done_rounded, text: 'Keep up to 5 pages available offline'),
-              const _PremiumFeature(icon: Icons.auto_awesome, text: 'Unlock Glitter brushes and Glitter fills'),
-              const _PremiumFeature(icon: Icons.emoji_emotions_outlined, text: 'Unlock Stickers'),
-              const _PremiumFeature(icon: Icons.auto_awesome, text: 'Open premium artwork collections'),
-              const _PremiumFeature(icon: Icons.travel_explore, text: 'Color while traveling without Wi‑Fi'),
-              const SizedBox(height: 16),
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                value: appState.premiumUnlocked,
-                onChanged: appState.setPremiumPreview,
-                title: const Text('Developer premium preview', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                subtitle: const Text('Use this during development until live Apple/Google product IDs are connected.', style: TextStyle(color: Colors.white60)),
-              ),
-            ]),
-          ),
-        ),
-      ),
-      const _SectionTitle('Premium Preview'),
-      _HorizontalArtworkList(artworks: appState.artworks.where((a) => a.isPremium).toList(), appState: appState),
-      const SizedBox(height: 24),
-    ]);
-  }
-}
-
-class _PremiumFeature extends StatelessWidget {
-  const _PremiumFeature({required this.icon, required this.text});
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(children: [
-          Icon(icon, color: huePopGold, size: 20),
-          const SizedBox(width: 9),
-          Expanded(child: Text(text, style: const TextStyle(color: Colors.white))),
-        ]),
-      );
-}
-
 class _ProfilePage extends StatelessWidget {
   const _ProfilePage({required this.appState});
   final HuePopAppState appState;
@@ -522,7 +462,7 @@ class _ColorCloudStatus extends StatelessWidget {
           const SizedBox(height: 10),
           const Text('Huepop Color Cloud', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
           const SizedBox(height: 6),
-          Text(appState.catalogError == null ? 'Loading artwork…' : 'Artwork is temporarily unavailable. Pull a fresh copy from Profile > Artwork Refresh.', textAlign: TextAlign.center),
+          Text(appState.catalogError == null ? 'Loading artworkâ€¦' : 'Artwork is temporarily unavailable. Pull a fresh copy from Profile > Artwork Refresh.', textAlign: TextAlign.center),
         ]),
       );
 }
@@ -670,7 +610,7 @@ Future<void> _downloadArtwork(BuildContext context, HuePopAppState appState, Art
       builder: (context) => AlertDialog(
         icon: const Icon(Icons.workspace_premium_rounded, color: huePopPurple, size: 38),
         title: const Text('Premium offline coloring'),
-        content: const Text('Offline downloads are a HuePop Premium feature. Premium members can keep up to 5 coloring pages on this device for coloring without Wi‑Fi or mobile data.'),
+        content: const Text('Offline downloads are a HuePop Premium feature. Premium members can keep up to 5 coloring pages on this device for coloring without Wiâ€‘Fi or mobile data.'),
         actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
       ),
     );
@@ -750,3 +690,4 @@ Future<void> _openArtwork(BuildContext context, HuePopAppState appState, Artwork
     ),
   );
 }
+
