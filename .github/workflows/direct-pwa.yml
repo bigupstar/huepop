@@ -1,0 +1,62 @@
+name: HuePop Direct PWA ZIP
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: Branch to build
+        required: true
+        default: direct-stripe
+        type: choice
+        options:
+          - direct-stripe
+
+permissions:
+  contents: read
+
+jobs:
+  build-pwa:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout HuePop Direct
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze HuePop Direct
+        run: flutter analyze
+
+      - name: Build release PWA
+        run: flutter build web --release
+
+      - name: Verify PWA output
+        run: |
+          test -f build/web/index.html
+          test -f build/web/manifest.json
+          test -d build/web/icons
+          echo "HuePop PWA output verified."
+
+      - name: Create BigUpStar PWA ZIP
+        working-directory: build/web
+        run: zip -r ../../HuePop-Direct-PWA.zip .
+
+      - name: Upload PWA ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HuePop-Direct-PWA
+          path: HuePop-Direct-PWA.zip
+          if-no-files-found: error
+          retention-days: 30
